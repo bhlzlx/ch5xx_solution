@@ -1,0 +1,627 @@
+/* ============ 全局样式 ============ */
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+    background: #0f172a;
+    color: #e2e8f0;
+    min-height: 100vh;
+    padding: 20px;
+}
+
+.container {
+    width: 70%;
+    max-width: 1200px;
+    margin: 0 auto;
+}
+
+/* 头部 */
+header {
+    text-align: center;
+    margin-bottom: 30px;
+}
+
+header h1 {
+    font-size: 2rem;
+    color: #38bdf8;
+    margin-bottom: 8px;
+}
+
+.subtitle {
+    color: #94a3b8;
+    font-size: 1rem;
+}
+
+/* 分区 */
+.section {
+    background: #1e293b;
+    border: 1px solid #334155;
+    border-radius: 12px;
+    padding: 20px;
+    margin-bottom: 20px;
+}
+
+.section h2 {
+    font-size: 1.2rem;
+    color: #38bdf8;
+    margin-bottom: 16px;
+    padding-bottom: 8px;
+    border-bottom: 1px solid #334155;
+}
+
+/* 按钮 */
+.btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 10px 20px;
+    border: none;
+    border-radius: 8px;
+    font-size: 0.9rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.2s ease;
+}
+
+.btn:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+}
+
+.btn:not(:disabled):hover {
+    transform: translateY(-1px);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+}
+
+.btn-primary {
+    background: #2563eb;
+    color: white;
+}
+
+.btn-primary:not(:disabled):hover {
+    background: #1d4ed8;
+}
+
+.btn-success {
+    background: #16a34a;
+    color: white;
+}
+
+.btn-success:not(:disabled):hover {
+    background: #15803d;
+}
+
+.btn-danger {
+    background: #dc2626;
+    color: white;
+}
+
+.btn-danger:not(:disabled):hover {
+    background: #b91c1c;
+}
+
+.btn-warning {
+    background: #d97706;
+    color: white;
+}
+
+.btn-warning:not(:disabled):hover {
+    background: #b45309;
+}
+
+/* 状态徽标 */
+.status-badge {
+    display: inline-block;
+    padding: 6px 14px;
+    border-radius: 20px;
+    font-size: 0.85rem;
+    font-weight: 600;
+}
+
+.status-disconnected {
+    background: #451a1a;
+    color: #fca5a5;
+}
+
+.status-connected {
+    background: #14532d;
+    color: #86efac;
+}
+
+/* 连接控件 */
+.connection-controls {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex-wrap: wrap;
+}
+
+/* VID/PID 过滤开关 */
+.filter-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 13px;
+    opacity: 0.85;
+    cursor: pointer;
+    white-space: nowrap;
+    user-select: none;
+}
+
+.filter-toggle input[type="checkbox"] {
+    cursor: pointer;
+    margin: 0;
+}
+
+/* 设备信息 */
+.info-box {
+    margin-top: 16px;
+    padding: 14px;
+    background: #0f172a;
+    border-radius: 8px;
+    border: 1px solid #334155;
+}
+
+.info-box h3 {
+    font-size: 0.9rem;
+    color: #94a3b8;
+    margin-bottom: 8px;
+}
+
+.info-box pre {
+    font-family: 'JetBrains Mono', 'Fira Code', 'Consolas', monospace;
+    font-size: 0.8rem;
+    color: #e2e8f0;
+    white-space: pre-wrap;
+    word-break: break-all;
+    line-height: 1.6;
+}
+
+.hidden {
+    display: none !important;
+}
+
+/* ============ 配置区域 ============ */
+.config-form {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+}
+
+.config-items {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.config-item {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 8px 12px;
+    background: #0f172a;
+    border-radius: 8px;
+    border: 1px solid #334155;
+}
+
+.config-item label {
+    min-width: 110px;
+    font-size: 0.9rem;
+    color: #94a3b8;
+}
+
+.config-item .input-field {
+    max-width: 180px;
+}
+
+.config-bit {
+    font-family: 'JetBrains Mono', 'Fira Code', 'Consolas', monospace;
+    font-size: 0.75rem;
+    color: #64748b;
+    background: #1e293b;
+    padding: 2px 8px;
+    border-radius: 4px;
+    border: 1px solid #334155;
+    white-space: nowrap;
+}
+
+.config-preview {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 12px;
+    background: #0f172a;
+    border-radius: 8px;
+    border: 1px solid #334155;
+    font-size: 0.9rem;
+    color: #94a3b8;
+}
+
+.preview-code {
+    font-family: 'JetBrains Mono', 'Fira Code', 'Consolas', monospace;
+    font-size: 1rem;
+    color: #38bdf8;
+    background: #1e293b;
+    padding: 4px 10px;
+    border-radius: 4px;
+    border: 1px solid #334155;
+    letter-spacing: 1px;
+}
+
+.config-actions {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex-wrap: wrap;
+    margin-top: 4px;
+}
+
+/* 表单提示 */
+.form-hint {
+    font-size: 0.8rem;
+    color: #64748b;
+    font-style: italic;
+}
+
+/* ============ 配置标签切换 ============ */
+.config-tabs {
+    display: flex;
+    gap: 4px;
+    margin-bottom: 16px;
+    background: #0f172a;
+    border-radius: 8px;
+    padding: 4px;
+    border: 1px solid #334155;
+}
+
+.config-tab {
+    flex: 1;
+    padding: 8px 16px;
+    border: none;
+    border-radius: 6px;
+    font-size: 0.85rem;
+    font-weight: 600;
+    cursor: pointer;
+    background: transparent;
+    color: #94a3b8;
+    transition: all 0.2s ease;
+}
+
+.config-tab:hover {
+    color: #e2e8f0;
+    background: #1e293b;
+}
+
+.config-tab-active {
+    background: #2563eb !important;
+    color: white !important;
+}
+
+/* ============ 按键映射配置 ============ */
+.config-info-bar {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    padding: 8px 12px;
+    background: #0f172a;
+    border-radius: 8px;
+    border: 1px solid #334155;
+    font-size: 0.85rem;
+    color: #94a3b8;
+    flex-wrap: wrap;
+}
+
+.config-info-bar code {
+    font-family: 'JetBrains Mono', 'Fira Code', 'Consolas', monospace;
+    font-size: 0.8rem;
+    color: #38bdf8;
+    background: #1e293b;
+    padding: 2px 6px;
+    border-radius: 4px;
+}
+
+.keymap-container {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+    padding: 4px;
+}
+
+.keymap-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 12px 14px;
+    background: #0f172a;
+    border-radius: 8px;
+    border: 1px solid #334155;
+    transition: border-color 0.2s;
+    flex-wrap: nowrap;
+    min-height: 52px;
+}
+
+.keymap-item:hover {
+    border-color: #2563eb;
+}
+
+.keymap-index {
+    font-family: 'JetBrains Mono', 'Fira Code', 'Consolas', monospace;
+    font-size: 0.95rem;
+    color: #64748b;
+    min-width: 28px;
+    text-align: right;
+    flex-shrink: 0;
+}
+
+.keymap-send-btn {
+    width: 28px;
+    height: 28px;
+    border: 1px solid #334155;
+    border-radius: 6px;
+    background: #1e293b;
+    color: #4ade80;
+    font-size: 0.75rem;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    transition: all 0.15s ease;
+    padding: 0;
+    line-height: 1;
+}
+
+.keymap-send-btn:hover {
+    background: #2563eb;
+    border-color: #2563eb;
+    color: white;
+}
+
+.keymap-send-btn:active {
+    transform: scale(0.9);
+}
+
+.keymap-label {
+    font-size: 0.95rem;
+    color: #94a3b8;
+    min-width: 56px;
+    flex-shrink: 0;
+}
+
+.keymap-primary-select {
+    width: 100px;
+    padding: 6px 6px;
+    font-size: 0.85rem;
+    flex-shrink: 0;
+}
+
+.keymap-secondary {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    flex-shrink: 0;
+}
+
+.keymap-secondary-select {
+    width: 100px;
+    padding: 6px 6px;
+    font-size: 0.85rem;
+    flex-shrink: 0;
+}
+
+.keymap-item .input-field {
+    padding: 6px 6px;
+    font-size: 0.85rem;
+}
+
+/* 按键高亮状态 */
+.keymap-active {
+    border-color: #22c55e !important;
+    background: rgba(34, 197, 94, 0.08) !important;
+    box-shadow: 0 0 8px rgba(34, 197, 94, 0.2);
+}
+
+/* ============ 发送控件 ============ */
+.send-controls {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.form-row {
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+}
+
+.form-row label {
+    min-width: 140px;
+    padding-top: 8px;
+    font-size: 0.9rem;
+    color: #94a3b8;
+}
+
+.input-field {
+    flex: 1;
+    padding: 8px 12px;
+    background: #0f172a;
+    border: 1px solid #334155;
+    border-radius: 6px;
+    color: #e2e8f0;
+    font-family: 'JetBrains Mono', 'Fira Code', 'Consolas', monospace;
+    font-size: 0.85rem;
+    transition: border-color 0.2s;
+}
+
+.input-field:focus {
+    outline: none;
+    border-color: #2563eb;
+}
+
+.short-input {
+    max-width: 200px;
+}
+
+.send-controls > .btn {
+    align-self: flex-start;
+}
+
+/* 接收控件 */
+.receive-controls {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex-wrap: wrap;
+    margin-bottom: 12px;
+}
+
+#receiveStatus {
+    font-size: 0.75rem;
+    padding: 3px 10px;
+    margin-left: 8px;
+    vertical-align: middle;
+}
+
+/* 报告容器 */
+.reports-container {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.reports-placeholder {
+    padding: 24px;
+    text-align: center;
+    color: #64748b;
+    font-size: 0.9rem;
+    background: #0f172a;
+    border-radius: 8px;
+    border: 1px dashed #334155;
+}
+
+/* 单个 Report ID 卡片 */
+.report-card {
+    background: #0f172a;
+    border: 1px solid #334155;
+    border-radius: 8px;
+    overflow: hidden;
+}
+
+.report-card-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 6px 12px;
+    background: #1e293b;
+    border-bottom: 1px solid #334155;
+}
+
+.report-card-title {
+    font-family: 'JetBrains Mono', 'Fira Code', 'Consolas', monospace;
+    font-size: 0.85rem;
+    font-weight: 600;
+    color: #38bdf8;
+}
+
+.report-card-stats {
+    font-size: 0.75rem;
+    color: #64748b;
+}
+
+.report-card-body {
+    padding: 8px 12px;
+    font-family: 'JetBrains Mono', 'Fira Code', 'Consolas', monospace;
+    font-size: 0.95rem;
+    line-height: 1.8;
+    color: #e2e8f0;
+    min-height: 28px;
+    word-break: break-all;
+    letter-spacing: 0.5px;
+    transition: background 0.15s;
+}
+
+.report-card-body.flash {
+    background: #1e3a5f;
+}
+
+/* 响应式 */
+@media (max-width: 800px) {
+    .container {
+        width: 100%;
+    }
+}
+
+@media (max-width: 600px) {
+    body {
+        padding: 12px;
+    }
+
+    header h1 {
+        font-size: 1.4rem;
+    }
+
+    .section {
+        padding: 14px;
+    }
+
+    .connection-controls,
+    .receive-controls,
+    .config-actions {
+        flex-direction: column;
+        align-items: stretch;
+    }
+
+    .form-row {
+        flex-direction: column;
+    }
+
+    .form-row label {
+        min-width: unset;
+        padding-top: 0;
+    }
+
+    .short-input {
+        max-width: 100%;
+    }
+
+    .config-item {
+        flex-wrap: wrap;
+    }
+
+    .config-item label {
+        min-width: 100px;
+    }
+
+    .config-item .input-field {
+        max-width: 100%;
+        flex: 1;
+    }
+
+    .keymap-container {
+        grid-template-columns: 1fr;
+    }
+
+    .keymap-item {
+        flex-wrap: wrap;
+        min-height: unset;
+        padding: 10px 12px;
+    }
+
+    .keymap-primary-select,
+    .keymap-secondary-select {
+        width: 90px;
+    }
+
+    .log-output {
+        height: 250px;
+    }
+
+    .log-stats {
+        flex-direction: column;
+        gap: 6px;
+    }
+}

@@ -1,0 +1,267 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>三模HITBOX配置工具</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>三模HITBOX配置工具</h1>
+            <p class="subtitle">仅适用于bilibili-久寿川方案</p>
+        </header>
+
+        <!-- 连接区域 -->
+        <section class="section connection-section">
+            <h2>📡 设备连接</h2>
+            <div class="connection-controls">
+                <button id="connectBtn" class="btn btn-primary">🔗 连接设备</button>
+                <label class="filter-toggle" title="只列出本方案的 HID 设备(VID 0x07D7 或 0x045E)；若列表为空请取消勾选">
+                    <input type="checkbox" id="filterVidPid" checked> 按 VID/PID 过滤
+                </label>
+                <button id="disconnectBtn" class="btn btn-danger" disabled>🔌 断开连接</button>
+                <span id="connectionStatus" class="status-badge status-disconnected">未连接</span>
+                <button id="saveAndRebootBtn" class="btn btn-danger" disabled style="margin-left:auto;">💾 保存配置并重启</button>
+                <button id="exportConfigBtn" class="btn btn-primary" style="margin-left:8px;">📤 导出配置</button>
+                <button id="importConfigBtn" class="btn btn-primary" style="margin-left:8px;">📥 导入配置</button>
+                <input type="file" id="importFileInput" accept=".json" style="display:none;">
+            </div>
+            <div id="deviceInfo" class="info-box hidden">
+                <h3>设备信息</h3>
+                <pre id="deviceInfoContent"></pre>
+            </div>
+        </section>
+
+        <!-- 注册区域 -->
+        <section class="section register-section">
+            <h2>🔑 设备注册</h2>
+            <div id="registerPanel" class="config-form">
+                <div class="config-items">
+                    <div class="config-item">
+                        <label>设备 MAC:</label>
+                        <code id="deviceMac" class="preview-code" style="font-family:monospace;">--:--:--:--:--:--</code>
+                        <button id="readMacBtn" class="btn btn-primary" title="读取设备 MAC 与注册状态，并把 MAC 复制到剪贴板">📩 读取并复制 MAC</button>
+                    </div>
+                    <div class="config-item">
+                        <label for="regCodeInput">注册码 (16位HEX):</label>
+                        <input type="text" id="regCodeInput" maxlength="16"
+                               class="input-field short-input"
+                               placeholder="例如 7735CF6EF566DE19"
+                               style="text-transform:uppercase;font-family:monospace;">
+                        <button id="sendRegCodeBtn" class="btn btn-success">✅ 激活注册</button>
+                        <span id="regStatus" class="status-badge status-disconnected">未注册</span>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- 配置区域 -->
+        <section class="section config-section">
+            <h2>⚙️ 设备配置</h2>
+
+            <!-- 配置类型切换标签 -->
+            <div class="config-tabs">
+                <button id="configTab1" class="config-tab config-tab-active">无线/睡眠配置 (0x01)</button>
+                <button id="configTab2" class="config-tab">按键映射配置 (0x02)</button>
+                <button id="configTab3" class="config-tab">网络名称配置 (0x03)</button>
+                <button id="configTab4" class="config-tab">开机图上传 (0x20~0x23)</button>
+            </div>
+
+            <!-- 配置类型 0x01: 无线/睡眠 -->
+            <div id="configPanel1" class="config-form">
+                <div class="config-items">
+                    <div class="config-item">
+                        <label for="wirelessMode">无线模式:</label>
+                        <select id="wirelessMode" class="input-field short-input">
+                            <option value="0">2.4G</option>
+                            <option value="1" selected>BLE</option>
+                        </select>
+                        <span class="config-bit">Bit 0 (1 bit)</span>
+                    </div>
+                    <div class="config-item">
+                        <label for="socd">SOCD:</label>
+                        <select id="socd" class="input-field short-input">
+                            <option value="0" selected>回中</option>
+                            <option value="1">后覆盖</option>
+                            <option value="2">前覆盖</option>
+                            <option value="3">上优先</option>
+                        </select>
+                        <span class="config-bit">Bits 2-1 (2 bits)</span>
+                    </div>
+                    <div class="config-item">
+                        <label for="enableModifyKey">方向修饰键:</label>
+                        <select id="enableModifyKey" class="input-field short-input">
+                            <option value="0" selected>禁用 (LS/RS 仅作普通按键)</option>
+                            <option value="1">启用 (LS/RS 作修饰键, RS+方向→右摇杆)</option>
+                        </select>
+                        <span class="config-bit">Byte 2, Bit 0 (1 bit)</span>
+                    </div>
+                    <div class="config-item">
+                        <label for="swapDirDpad">交换 D-Pad/左摇杆:</label>
+                        <select id="swapDirDpad" class="input-field short-input">
+                            <option value="0" selected>默认方向→左摇杆 (LS+方向→D-Pad)</option>
+                            <option value="1">默认方向→D-Pad (LS+方向→左摇杆)</option>
+                        </select>
+                        <span class="config-bit">Byte 2, Bit 4 (1 bit)</span>
+                    </div>
+                    <div class="config-item">
+                        <label for="rfCap">晶振电容:</label>
+                        <select id="rfCap" class="input-field short-input">
+                            <option value="0" selected>10 pF（默认）</option>
+                            <option value="1">12 pF</option>
+                            <option value="2">14 pF</option>
+                            <option value="3">16 pF</option>
+                            <option value="4">18 pF</option>
+                            <option value="5">20 pF</option>
+                            <option value="6">22 pF</option>
+                            <option value="7">24 pF</option>
+                        </select>
+                        <span class="config-bit">Byte 2, Bits 3-1 (3 bits, 2.4G 频偏补偿, 重启生效)</span>
+                    </div>
+                    <div class="config-item">
+                        <label for="sleepEnable">启用睡眠:</label>
+                        <select id="sleepEnable" class="input-field short-input">
+                            <option value="0">禁用</option>
+                            <option value="1" selected>启用</option>
+                        </select>
+                        <span class="config-bit">Bit 3 (1 bit)</span>
+                    </div>
+                    <div class="config-item">
+                        <label for="sleepTime">无线睡眠时间:</label>
+                        <input type="number" id="sleepTime" min="5" max="20" value="5" class="input-field short-input">
+                        <span class="config-bit">Bits 7-4 (4 bits, 编码 0~15 → 5~20 分钟)</span>
+                    </div>
+                </div>
+                <div class="config-preview">
+                    <span>0x01 预览: </span>
+                    <code id="configPreview" class="preview-code">01 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00</code>
+                </div>
+                <div class="config-actions">
+                    <button id="sendConfigBtn" class="btn btn-success" disabled>📤 发送配置 0x01</button>
+                    <button id="resetConfigBtn" class="btn btn-warning">↺ 重置为默认</button>
+                    <button id="readConfigBtn" class="btn btn-primary" disabled>📩 读取配置 (Feature Report)</button>
+                </div>
+            </div>
+
+            <!-- 配置类型 0x02: 按键映射 -->
+            <div id="configPanel2" class="config-form hidden">
+                <div class="config-info-bar">
+                    <span>配置类型: <strong>0x02</strong></span>
+                    <span>每个 Report 16 字节: <code>[0x02] [键位(0-19)] [映射值×4] [填充×10]</code></span>
+                </div>
+                <div class="keymap-container" id="keymapContainer">
+                    <!-- 由 JS 动态生成 -->
+                </div>
+                <div class="config-actions">
+                    <button id="sendKeymapBtn" class="btn btn-success" disabled>📤 发送全部按键映射 (20次, 每10ms)</button>
+                    <button id="resetKeymapBtn" class="btn btn-warning">↺ 重置为默认映射</button>
+                    <button id="readKeymapBtn" class="btn btn-primary" disabled>📩 从设备读取映射 (20键)</button>
+                </div>
+            </div>
+
+            <!-- 配置类型 0x03: 网络名称 -->
+            <div id="configPanel3" class="config-form hidden">
+                <div class="config-info-bar">
+                    <span>配置类型: <strong>0x03</strong></span>
+                    <span>16 字节: <code>[0x03] [网络名称×15, null-terminated ASCII]</code></span>
+                </div>
+                <div class="config-items">
+                    <div class="config-item">
+                        <label for="networkName">无线名称:</label>
+                        <input type="text" id="networkName" maxlength="16" value="CH58X-Gamepad" class="input-field" placeholder="最大16个字符">
+                        <span class="config-bit">15 bytes 有效, 以 0x00 结尾</span>
+                    </div>
+                </div>
+                <div class="config-preview">
+                    <span>0x03 预览: </span>
+                    <code id="networkNamePreview" class="preview-code">03 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00</code>
+                </div>
+                <div class="config-actions">
+                    <button id="sendNetworkNameBtn" class="btn btn-success" disabled>📤 发送网络名 0x03</button>
+                    <button id="readNameBtn" class="btn btn-primary" disabled>📩 从设备读取网络名</button>
+                </div>
+            </div>
+
+            <!-- 配置类型 0x20~0x23: 开机图上传 -->
+            <div id="configPanel4" class="config-form hidden">
+                <div class="config-info-bar">
+                    <span>协议: <strong>0x21 开始 → 0x20 数据块×74 → 0x22 提交</strong></span>
+                    <span>图片存在设备 Data-Flash(1024 字节 + 8 字节头), 不占代码区</span>
+                </div>
+
+                <div class="config-items">
+                    <div class="config-item">
+                        <label for="logoFile">选择图片:</label>
+                        <input type="file" id="logoFile" class="input-field" accept="image/*">
+                        <span class="config-bit">PNG/BMP/JPEG 等浏览器能解码的格式; 自动缩放到 128×64</span>
+                    </div>
+                    <div class="config-item">
+                        <label for="logoThreshold">阈值:</label>
+                        <input type="range" id="logoThreshold" min="0" max="255" value="128" class="input-field">
+                        <span class="config-bit">灰度大于阈值 => 点亮(黑底白字的图直接用); 抖动模式下忽略</span>
+                    </div>
+                    <div class="config-item">
+                        <label for="logoFit">缩放方式:</label>
+                        <select id="logoFit" class="input-field">
+                            <option value="fit" selected>等比居中(fit)</option>
+                            <option value="fill">铺满裁切(fill)</option>
+                            <option value="stretch">拉伸(stretch)</option>
+                        </select>
+                    </div>
+                    <div class="config-item">
+                        <label for="logoDither">抖动:</label>
+                        <select id="logoDither" class="input-field">
+                            <option value="none" selected>无(单阈值)</option>
+                            <option value="bayer8">有序抖动 bayer8</option>
+                            <option value="fs">误差扩散(Floyd-Steinberg)</option>
+                        </select>
+                    </div>
+                    <div class="config-item">
+                        <label for="logoInvert">反色:</label>
+                        <input type="checkbox" id="logoInvert">
+                        <span class="config-bit">勾选后改成"深色处点亮"(白底黑字的图用)</span>
+                    </div>
+                </div>
+
+                <div class="config-preview">
+                    <span>预览(白点 = 屏上发光): </span>
+                    <canvas id="logoPreview" width="256" height="128"
+                            style="image-rendering: pixelated; border:1px solid #334155; background:#000;"></canvas>
+                    <div><span id="logoStat" class="preview-code"></span></div>
+                </div>
+
+                <div class="config-info-bar">
+                    <span>设备当前: <strong id="logoDeviceStat">未知(连接后自动读取)</strong></span>
+                    <span id="logoProgress"></span>
+                </div>
+
+                <div class="config-actions">
+                    <button id="uploadLogoBtn" class="btn btn-success" disabled>📤 上传到设备</button>
+                    <button id="restoreLogoBtn" class="btn btn-warning" disabled>↺ 恢复默认开机图</button>
+                </div>
+
+                <div class="config-info-bar">
+                    <span>上传完成后需要重启设备(可用「保存配置并重启」)才会显示新开机图</span>
+                </div>
+            </div>
+        </section>
+
+        <!-- 接收数据区域 -->
+        <section class="section receive-section">
+            <h2>📥 接收数据 <span id="receiveStatus" class="status-badge status-disconnected">未监听</span></h2>
+            <div class="receive-controls">
+                <button id="clearReportsBtn" class="btn btn-warning">🗑️ 清空所有</button>
+            </div>
+            <div class="reports-container" id="reportsContainer">
+                <div class="reports-placeholder">等待设备连接并接收数据...</div>
+            </div>
+        </section>
+    </div>
+
+    <!-- 隐藏日志区域，供 appendLog 输出调试信息 -->
+    <pre id="hiddenLog" class="hidden" aria-hidden="true"></pre>
+    <script src="app.js"></script>
+</body>
+</html>
