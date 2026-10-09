@@ -198,25 +198,84 @@
                         <span class="config-bit">PNG/BMP/JPEG 等浏览器能解码的格式; 自动缩放到 128×64</span>
                     </div>
                     <div class="config-item">
-                        <label for="logoThreshold">阈值:</label>
-                        <input type="range" id="logoThreshold" min="0" max="255" value="128" class="input-field">
-                        <span class="config-bit">灰度大于阈值 => 点亮(黑底白字的图直接用); 抖动模式下忽略</span>
-                    </div>
-                    <div class="config-item">
                         <label for="logoFit">缩放方式:</label>
                         <select id="logoFit" class="input-field">
                             <option value="fit" selected>等比居中(fit)</option>
                             <option value="fill">铺满裁切(fill)</option>
                             <option value="stretch">拉伸(stretch)</option>
+                            <option value="crop">选区框选(crop, 2:1)</option>
                         </select>
+                        <span class="config-bit">图比 128x64 大时用"选区框选"自己挑一块要的部分</span>
+                    </div>
+                </div>
+
+                <div class="config-info-bar" id="logoCropBar" style="display:none;">
+                    <span>选区裁切(比例锁死 2:1, 与 128x64 同比例, 缩过去不变形)</span>
+                    <span>框内拖动 = 移动; 拖四角 = 缩放; 松手后重新生成二值图</span>
+                </div>
+                <div class="config-preview" id="logoCropBox"
+                     style="display:none; flex-direction:column; align-items:flex-start; gap:8px;">
+                    <canvas id="logoCropCanvas"
+                            style="image-rendering: pixelated; border:1px solid #334155; background:#000; touch-action:none; cursor:default; max-width:100%;"></canvas>
+                    <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap;">
+                        <button id="logoCropResetBtn" class="btn btn-warning">↺ 重置选区(最大 2:1)</button>
+                        <span id="logoCropInfo" class="preview-code"></span>
+                    </div>
+                </div>
+
+                <div class="config-info-bar">
+                    <span>色阶(灰度预处理, 在二值化之前; 全部保持默认 = 不做任何处理)</span>
+                    <span>顺序: 黑白场拉伸 → 伽马 → 对比度/亮度</span>
+                </div>
+                <div class="config-items">
+                    <div class="config-item">
+                        <label for="logoBlack">黑场:</label>
+                        <input type="range" id="logoBlack" min="0" max="254" value="0" class="input-field">
+                        <span class="config-bit">不高于该灰度的像素压成纯黑 · 当前 <b id="logoBlackVal">0</b></span>
                     </div>
                     <div class="config-item">
-                        <label for="logoDither">抖动:</label>
-                        <select id="logoDither" class="input-field">
-                            <option value="none" selected>无(单阈值)</option>
-                            <option value="bayer8">有序抖动 bayer8</option>
-                            <option value="fs">误差扩散(Floyd-Steinberg)</option>
-                        </select>
+                        <label for="logoWhite">白场:</label>
+                        <input type="range" id="logoWhite" min="1" max="255" value="255" class="input-field">
+                        <span class="config-bit">不低于该灰度的像素拉到纯白 · 当前 <b id="logoWhiteVal">255</b></span>
+                    </div>
+                    <div class="config-item">
+                        <label for="logoGamma">伽马:</label>
+                        <input type="range" id="logoGamma" min="20" max="300" value="100" class="input-field">
+                        <span class="config-bit">中间调明暗(100 = 1.0 不变) · 当前 <b id="logoGammaVal">1.00</b></span>
+                    </div>
+                    <div class="config-item">
+                        <label for="logoBrightness">亮度:</label>
+                        <input type="range" id="logoBrightness" min="-128" max="128" value="0" class="input-field">
+                        <span class="config-bit">整体加减 · 当前 <b id="logoBrightnessVal">0</b></span>
+                    </div>
+                    <div class="config-item">
+                        <label for="logoContrast">对比度:</label>
+                        <input type="range" id="logoContrast" min="-100" max="100" value="0" class="input-field">
+                        <span class="config-bit">以 128 为中心缩放 · 当前 <b id="logoContrastVal">0</b>%</span>
+                    </div>
+                    <div class="config-item">
+                        <label>色阶操作:</label>
+                        <button id="logoAutoLevelsBtn" class="btn btn-primary">✨ 自动色阶</button>
+                        <button id="logoResetLevelsBtn" class="btn btn-warning">↺ 重置色阶</button>
+                        <span class="config-bit">自动色阶 = 按直方图掐掉两端各 0.5%</span>
+                    </div>
+                </div>
+
+                <div class="config-info-bar">
+                    <span>二值化(把色阶后的灰度变成 1bpp)</span>
+                    <span>带 ★ 的算法会用到阈值; 有序/噪声抖动自带阈值矩阵, 忽略阈值</span>
+                </div>
+                <div class="config-items">
+                    <div class="config-item">
+                        <label for="logoDither">抖动算法:</label>
+                        <select id="logoDither" class="input-field"></select>
+                        <span class="config-bit" id="logoDitherNote"></span>
+                    </div>
+                    <div class="config-item" id="logoThresholdRow">
+                        <label for="logoThreshold">阈值:</label>
+                        <input type="range" id="logoThreshold" min="0" max="255" value="128" class="input-field">
+                        <span class="config-bit">灰度大于阈值 => 点亮(黑底白字的图直接用) · 当前 <b id="logoThresholdVal">128</b></span>
+                        <span class="config-bit" id="logoThresholdNote"></span>
                     </div>
                     <div class="config-item">
                         <label for="logoInvert">反色:</label>
@@ -225,11 +284,20 @@
                     </div>
                 </div>
 
+                <div class="config-preview" style="flex-wrap: wrap; align-items: flex-start;">
+                    <div>
+                        <div><span>① 色阶后(灰度): </span></div>
+                        <canvas id="logoGrayPreview" width="256" height="128"
+                                style="image-rendering: pixelated; border:1px solid #334155; background:#000;"></canvas>
+                    </div>
+                    <div>
+                        <div><span>② 二值结果(白点 = 屏上发光): </span></div>
+                        <canvas id="logoPreview" width="256" height="128"
+                                style="image-rendering: pixelated; border:1px solid #334155; background:#000;"></canvas>
+                    </div>
+                </div>
                 <div class="config-preview">
-                    <span>预览(白点 = 屏上发光): </span>
-                    <canvas id="logoPreview" width="256" height="128"
-                            style="image-rendering: pixelated; border:1px solid #334155; background:#000;"></canvas>
-                    <div><span id="logoStat" class="preview-code"></span></div>
+                    <span id="logoStat" class="preview-code"></span>
                 </div>
 
                 <div class="config-info-bar">

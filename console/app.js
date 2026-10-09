@@ -54,10 +54,32 @@ const configPanel4 = document.getElementById('configPanel4');
 // 开机图面板
 const logoFileInput = document.getElementById('logoFile');
 const logoThresholdInput = document.getElementById('logoThreshold');
+const logoThresholdVal = document.getElementById('logoThresholdVal');
+const logoThresholdRow = document.getElementById('logoThresholdRow');
+const logoThresholdNote = document.getElementById('logoThresholdNote');
 const logoInvertCheckbox = document.getElementById('logoInvert');
 const logoFitSelect = document.getElementById('logoFit');
 const logoDitherSelect = document.getElementById('logoDither');
+const logoDitherNote = document.getElementById('logoDitherNote');
+const logoBlackInput = document.getElementById('logoBlack');
+const logoWhiteInput = document.getElementById('logoWhite');
+const logoGammaInput = document.getElementById('logoGamma');
+const logoBrightnessInput = document.getElementById('logoBrightness');
+const logoContrastInput = document.getElementById('logoContrast');
+const logoBlackVal = document.getElementById('logoBlackVal');
+const logoWhiteVal = document.getElementById('logoWhiteVal');
+const logoGammaVal = document.getElementById('logoGammaVal');
+const logoBrightnessVal = document.getElementById('logoBrightnessVal');
+const logoContrastVal = document.getElementById('logoContrastVal');
+const logoAutoLevelsBtn = document.getElementById('logoAutoLevelsBtn');
+const logoResetLevelsBtn = document.getElementById('logoResetLevelsBtn');
 const logoPreviewCanvas = document.getElementById('logoPreview');
+const logoGrayCanvas = document.getElementById('logoGrayPreview');
+const logoCropCanvas = document.getElementById('logoCropCanvas');
+const logoCropBox = document.getElementById('logoCropBox');
+const logoCropBar = document.getElementById('logoCropBar');
+const logoCropInfo = document.getElementById('logoCropInfo');
+const logoCropResetBtn = document.getElementById('logoCropResetBtn');
 const logoStatSpan = document.getElementById('logoStat');
 const logoProgressSpan = document.getElementById('logoProgress');
 const logoDeviceStatSpan = document.getElementById('logoDeviceStat');
@@ -824,8 +846,10 @@ async function sendAllKeymaps() {
 // ============ 开机图(WebHID 上传) ============
 // 与固件 APP/include/boot_logo_store.h 对应:
 //   0x21 开始 -> 0x20 数据块 x74 -> 0x22 提交, 然后用读回段 0x05 核对 CRC
-// 转换规则与 tools/bootlogo_gen.cpp 保持一致:
+// 转换规则(图片已在网页端处理, 不再有命令行工具):
 //   默认"灰度 > 阈值 的像素点亮"(黑底白字的图直接就对), invert 时反过来(深色点亮)。
+//   历史: 这套规则原先与 tools/bootlogo_gen.cpp 逐字节对齐过, 那个工具已删除;
+//   老路径(none/bayer8/fs)的字节级行为由 logo_dither_test.js 的黄金指纹守着。
 
 const LOGO_W = 128;
 const LOGO_H = 64;
@@ -835,7 +859,7 @@ const LOGO_PACKETS = Math.ceil(LOGO_BYTES / LOGO_PAYLOAD);   // 74
 const SEC_LOGO = 0x05;
 const LOGO_CMD = { CHUNK: 0x20, BEGIN: 0x21, COMMIT: 0x22, DEFAULT: 0x23 };
 
-// 8x8 有序抖动矩阵(与 bootlogo_gen.cpp 里的 kBayer8 相同)
+// 8x8 有序抖动矩阵(标准 Bayer 序列)
 const BAYER8 = [
     0, 32, 8, 40, 2, 34, 10, 42,
     48, 16, 56, 24, 50, 18, 58, 26,
@@ -846,6 +870,523 @@ const BAYER8 = [
     15, 47, 7, 39, 13, 45, 5, 37,
     63, 31, 55, 23, 61, 29, 53, 21,
 ];
+
+// 2x2 / 4x4 有序矩阵: 从 8x8 按步长抽样(与标准 Bayer 递推矩阵等价)
+function bayerSubsample(size) {
+    const step = 8 / size;
+    const out = new Uint8Array(size * size);
+    for (let y = 0; y < size; y++) {
+        for (let x = 0; x < size; x++) {
+            out[y * size + x] = BAYER8[(y * step) * 8 + (x * step)];
+        }
+    }
+    return out;
+}
+const BAYER4 = bayerSubsample(4);
+const BAYER2 = bayerSubsample(2);
+
+// ============ 灰度色阶(黑白场/伽马/亮度/对比度) ============
+// 注意: 全部参数为默认值时必须原样返回(不做任何浮点运算) —— 一旦多算了浮点,
+// none/bayer8/fs 的字节级行为就会变, logo_dither_test.js 的黄金指纹会立刻报错。
+
+function logoLevelNumber(v, dflt) {
+    const n = Number(v);
+    return Number.isFinite(n) ? n : dflt;
+}
+
+function logoLevelsAreIdentity(lv) {
+    if (!lv) return true;
+    return logoLevelNumber(lv.black, 0) === 0
+        && logoLevelNumber(lv.white, 255) === 255
+        && logoLevelNumber(lv.gamma, 1) === 1
+        && logoLevelNumber(lv.brightness, 0) === 0
+        && logoLevelNumber(lv.contrast, 0) === 0;
+}
+
+/**
+ * 色阶: 黑白场拉伸 -> 伽马 -> 对比度/亮度, 结果钳到 0..255
+ * @param {Float64Array} lum 就地修改
+ * @param {{black:number,white:number,gamma:number,brightness:number,contrast:number}} lv
+ */
+function applyLogoLevels(lum, lv) {
+    if (logoLevelsAreIdentity(lv)) return lum;
+
+    const black = logoLevelNumber(lv.black, 0);
+    const white = Math.max(black + 1, logoLevelNumber(lv.white, 255));
+    const gamma = Math.max(0.05, logoLevelNumber(lv.gamma, 1));
+    const brightness = logoLevelNumber(lv.brightness, 0);
+    const contrast = logoLevelNumber(lv.contrast, 0);
+    const span = white - black;
+    const invGamma = 1 / gamma;
+    const k = (100 + contrast) / 100;
+
+    for (let i = 0; i < lum.length; i++) {
+        let t = (lum[i] - black) / span;
+        if (t < 0) t = 0; else if (t > 1) t = 1;
+        if (gamma !== 1) t = Math.pow(t, invGamma);
+        let v = t * 255;
+        v = (v - 128) * k + 128 + brightness;
+        lum[i] = v < 0 ? 0 : (v > 255 ? 255 : v);
+    }
+    return lum;
+}
+
+/**
+ * 自动色阶: 按直方图掐掉两端 clipPercent% 的像素, 给出建议的黑场/白场
+ */
+function logoAutoLevels(lum, clipPercent) {
+    const clip = (clipPercent === undefined ? 0.5 : clipPercent) / 100;
+    const hist = new Uint32Array(256);
+    for (let i = 0; i < lum.length; i++) {
+        const v = Math.round(lum[i]);
+        hist[v < 0 ? 0 : (v > 255 ? 255 : v)]++;
+    }
+    const limit = lum.length * clip;
+    let black = 0, white = 255, acc = 0;
+    for (let v = 0; v < 256; v++) {
+        acc += hist[v];
+        if (acc > limit) { black = v; break; }
+    }
+    acc = 0;
+    for (let v = 255; v >= 0; v--) {
+        acc += hist[v];
+        if (acc > limit) { white = v; break; }
+    }
+    if (white - black < 8) {           // 纯色图: 只给一个很窄的窗口, 别把平图拉成噪声
+        const mid = (white + black) / 2;
+        black = Math.max(0, Math.round(mid - 4));
+        white = Math.min(255, Math.round(mid + 4));
+    }
+    return { black: black, white: white };
+}
+
+// ============ 阈值矩阵: void-and-cluster 蓝噪声 / Dot Diffusion 类矩阵 ============
+
+/** 固定种子的 xorshift32(不用 Math.random, 保证同参数下结果可复现) */
+function logoXorshift32(seed) {
+    let s = (seed >>> 0) || 0x9E3779B9;
+    return function () {
+        s ^= (s << 13) >>> 0; s >>>= 0;
+        s ^= s >>> 17;
+        s ^= (s << 5) >>> 0; s >>>= 0;
+        return s / 4294967296;
+    };
+}
+
+/**
+ * void-and-cluster(Ulichney 1993)生成 n x n 蓝噪声"秩矩阵", 秩 0..n*n-1。
+ * 秩 + 0.5 除以 n*n 就是该位置的抖动阈值。
+ * 用固定种子 + 固定扫描顺序, 同一 n 每次结果完全一致(测试可复现)。
+ * @returns {Int32Array} 长度 n*n, 行优先
+ */
+function voidAndClusterMatrix(n) {
+    const M = n * n;
+    const rnd = logoXorshift32(0x9E3779B9);
+
+    // 周期性高斯核(sigma=1.5, 半径 4)
+    const R = 4, SIGMA = 1.5, KR = 2 * R + 1;
+    const kern = new Float64Array(KR * KR);
+    for (let dy = -R, k = 0; dy <= R; dy++) {
+        for (let dx = -R; dx <= R; dx++, k++) {
+            kern[k] = Math.exp(-(dx * dx + dy * dy) / (2 * SIGMA * SIGMA));
+        }
+    }
+
+    const pattern = new Uint8Array(M);      // 1 = 有点
+    const energy = new Float64Array(M);     // 已放置点的核能量叠加
+
+    const addEnergy = (x, y, sign) => {
+        for (let dy = -R; dy <= R; dy++) {
+            const ny = (y + dy + n) % n;
+            for (let dx = -R; dx <= R; dx++) {
+                const nx = (x + dx + n) % n;
+                energy[ny * n + nx] += sign * kern[(dy + R) * KR + (dx + R)];
+            }
+        }
+    };
+    const place = (i) => { pattern[i] = 1; addEnergy(i % n, (i / n) | 0, 1); };
+    const remove = (i) => { pattern[i] = 0; addEnergy(i % n, (i / n) | 0, -1); };
+
+    // 1) 初始图案: 随机放一半的点
+    for (let i = 0; i < M; i++) if (rnd() < 0.5) place(i);
+    let ones = 0;
+    for (let i = 0; i < M; i++) ones += pattern[i];
+
+    // 2) 优化初始图案: 反复"把最紧的簇挪到最大的空洞", 直到它是同一个位置
+    for (let iter = 0; iter < M * 2; iter++) {
+        let tight = -1, tightE = -Infinity;
+        for (let i = 0; i < M; i++) {
+            if (pattern[i] && energy[i] > tightE) { tightE = energy[i]; tight = i; }
+        }
+        remove(tight);
+        let voidI = -1, voidE = Infinity;
+        for (let i = 0; i < M; i++) {
+            if (!pattern[i] && energy[i] < voidE) { voidE = energy[i]; voidI = i; }
+        }
+        if (voidI === tight) { place(tight); break; }
+        place(voidI);
+    }
+
+    // 3) 阶段一: 从 BIP 里按"从最紧到最松"把已有的点排名(ones-1 .. 0)
+    const bip = Uint8Array.from(pattern);          // 留一份半满图案给阶段二用
+    const rank = new Int32Array(M).fill(-1);
+    for (let r = ones - 1; r >= 0; r--) {
+        let tight = -1, tightE = -Infinity;
+        for (let i = 0; i < M; i++) {
+            if (pattern[i] && energy[i] > tightE) { tightE = energy[i]; tight = i; }
+        }
+        remove(tight);
+        rank[tight] = r;
+    }
+
+    // 4) 阶段二: 从 BIP 重新开始, 每次在最大空洞插一个点, 排名 ones .. M-1。
+    //    必须从 BIP 开始(而不是从阶段一留下的空图案), 否则会把已排过秩的位置再插一遍、
+    //    把它们覆盖掉, 结果有一批位置永远拿不到秩。
+    //    (Ulichney 原文把 50% 以上那一半用补图定义"空洞", 这里统一用"当前图案的最大空洞",
+    //     属于常见简化写法。)
+    pattern.fill(0);
+    energy.fill(0);
+    for (let i = 0; i < M; i++) if (bip[i]) place(i);
+    for (let r = ones; r < M; r++) {
+        let voidI = -1, voidE = Infinity;
+        for (let i = 0; i < M; i++) {
+            if (!pattern[i] && energy[i] < voidE) { voidE = energy[i]; voidI = i; }
+        }
+        place(voidI);
+        rank[voidI] = r;
+    }
+    return rank;
+}
+
+let blueNoise64Cache = null;
+function getBlueNoise64() {
+    if (!blueNoise64Cache) blueNoise64Cache = voidAndClusterMatrix(64);
+    return blueNoise64Cache;
+}
+
+let dotClassCache = null;
+/**
+ * Dot Diffusion 的 8x8 类矩阵(0..63)。
+ * 说明: 这里用 void-and-cluster 在 8x8 上生成一张"分散得最开"的类顺序表, 而不是
+ * 照抄 Knuth 论文/ Mese 论文里的那张原表 —— 手头没有可核对的原文, 不想凭记忆贴表。
+ * 若要和某个参考实现逐像素对齐, 把这里换成那张表即可(其余逻辑不用动)。
+ */
+function getDotClass() {
+    if (!dotClassCache) dotClassCache = voidAndClusterMatrix(8);
+    return dotClassCache;
+}
+
+/** 蓝噪声阈值: 64x64 平铺; 每块取一个确定性偏移, 避免平铺出可见的重复 */
+function blueNoiseThreshold(x, y, lut) {
+    const tx = x >> 6, ty = y >> 6;
+    let h = (tx * 0x9E3779B1 + ty * 0x85EBCA77) >>> 0;
+    h = (h ^ (h >>> 15)) >>> 0;
+    const ox = h & 63, oy = (h >>> 8) & 63;
+    return ((lut[(((y + oy) & 63) << 6) + ((x + ox) & 63)] + 0.5) / 4096) * 255;
+}
+
+// ============ 误差扩散核 ============
+// taps: [dx, dy, weight], 权重和应当等于 div(Atkinson 故意只扩散 6/8, 是它"高对比"的来源)。
+// fs 的 taps 顺序与最早的 C++ 实现保持一致, 保证累加顺序相同 -> 浮点结果逐位不变。
+const LOGO_DIFFUSION_KERNELS = {
+    //         *  7
+    //      3  5  1      /16
+    fs:         { div: 16, taps: [[1, 0, 7], [-1, 1, 3], [0, 1, 5], [1, 1, 1]] },
+    //         *  1  1
+    //      1  1  1
+    //         1         /8   (只扩散 3/4 的误差 -> 对比度更高, 暗部/亮部会并阶)
+    atkinson:   { div: 8,  taps: [[1, 0, 1], [2, 0, 1], [-1, 1, 1], [0, 1, 1], [1, 1, 1], [0, 2, 1]] },
+    //         *  2
+    //      1  1         /4
+    sierralite: { div: 4,  taps: [[1, 0, 2], [-1, 1, 1], [0, 1, 1]] },
+    //         *  4  3
+    //      1  2  3  2  1   /16
+    sierra2:    { div: 16, taps: [[1, 0, 4], [2, 0, 3], [-2, 1, 1], [-1, 1, 2], [0, 1, 3], [1, 1, 2], [2, 1, 1]] },
+    //         *  8  4
+    //      2  4  8  4  2   /32
+    burkes:     { div: 32, taps: [[1, 0, 8], [2, 0, 4], [-2, 1, 2], [-1, 1, 4], [0, 1, 8], [1, 1, 4], [2, 1, 2]] },
+    //         *  8  4
+    //      2  4  8  4  2
+    //      1  2  4  2  1   /42
+    stucki:     { div: 42, taps: [[1, 0, 8], [2, 0, 4], [-2, 1, 2], [-1, 1, 4], [0, 1, 8], [1, 1, 4], [2, 1, 2],
+                                  [-2, 2, 1], [-1, 2, 2], [0, 2, 4], [1, 2, 2], [2, 2, 1]] },
+    //         *  7  5
+    //      3  5  7  5  3
+    //      1  3  5  3  1   /48
+    jarvis:     { div: 48, taps: [[1, 0, 7], [2, 0, 5], [-2, 1, 3], [-1, 1, 5], [0, 1, 7], [1, 1, 5], [2, 1, 3],
+                                  [-2, 2, 1], [-1, 2, 3], [0, 2, 5], [1, 2, 3], [2, 2, 1]] },
+};
+
+/**
+ * 误差扩散(通用): 逐像素量化后把误差按核权重加到还没处理的邻居上
+ */
+function ditherErrorDiffusion(lum, ctx, kernel) {
+    const g = Float64Array.from(lum);
+    const taps = kernel.taps;
+    const div = kernel.div;
+    for (let y = 0; y < LOGO_H; y++) {
+        for (let x = 0; x < LOGO_W; x++) {
+            const i = y * LOGO_W + x;
+            const v = g[i];
+            const on = logoIsLit(v, ctx.threshold, ctx.invert);
+            ctx.setBit(x, y, on);
+            const err = v - ((on !== ctx.invert) ? 255 : 0);
+            for (let t = 0; t < taps.length; t++) {
+                const nx = x + taps[t][0], ny = y + taps[t][1];
+                if (nx < 0 || nx >= LOGO_W || ny >= LOGO_H) continue;
+                g[ny * LOGO_W + nx] += err * taps[t][2] / div;
+            }
+        }
+    }
+}
+
+/**
+ * Dot Diffusion(Knuth 1987): 8x8 类矩阵平铺全图, 按类号从小到大处理;
+ * 误差只扩散给"类号更大(还没处理)"的 8 邻域, 权重 1/(类号差) 再归一化。
+ * 同一类里的像素先全部量化, 再一起扩散(避免类内顺序影响结果)。
+ */
+function ditherDotDiffusion(lum, ctx) {
+    const cls = getDotClass();
+    const g = Float64Array.from(lum);
+    const NB = [[1, 0], [1, 1], [0, 1], [-1, 1], [-1, 0], [-1, -1], [0, -1], [1, -1]];
+
+    const buckets = [];
+    for (let k = 0; k < 64; k++) buckets.push([]);
+    for (let y = 0; y < LOGO_H; y++) {
+        for (let x = 0; x < LOGO_W; x++) {
+            buckets[cls[(y & 7) * 8 + (x & 7)]].push(y * LOGO_W + x);
+        }
+    }
+
+    const weightCache = new Array(64 * 64);
+    const weightsFor = (k, x, y) => {
+        const slot = k * 64 + (y & 7) * 8 + (x & 7);
+        let w = weightCache[slot];
+        if (!w) {
+            w = new Float64Array(8);
+            let sum = 0;
+            for (let t = 0; t < 8; t++) {
+                const d = cls[((y + NB[t][1]) & 7) * 8 + ((x + NB[t][0]) & 7)] - k;
+                if (d > 0) { w[t] = 1 / d; sum += w[t]; }
+            }
+            if (sum > 0) for (let t = 0; t < 8; t++) w[t] /= sum;
+            weightCache[slot] = w;
+        }
+        return w;
+    };
+
+    for (let k = 0; k < 64; k++) {
+        const list = buckets[k];
+        const errs = new Float64Array(list.length);
+        for (let n = 0; n < list.length; n++) {
+            const i = list[n];
+            const v = g[i];
+            const on = logoIsLit(v, ctx.threshold, ctx.invert);
+            ctx.setBit(i % LOGO_W, (i / LOGO_W) | 0, on);
+            errs[n] = v - ((on !== ctx.invert) ? 255 : 0);
+        }
+        for (let n = 0; n < list.length; n++) {
+            const err = errs[n];
+            if (err === 0) continue;
+            const i = list[n];
+            const x = i % LOGO_W, y = (i / LOGO_W) | 0;
+            const w = weightsFor(k, x, y);
+            for (let t = 0; t < 8; t++) {
+                if (w[t] === 0) continue;
+                const nx = x + NB[t][0], ny = y + NB[t][1];
+                if (nx < 0 || nx >= LOGO_W || ny < 0 || ny >= LOGO_H) continue;
+                g[ny * LOGO_W + nx] += err * w[t];
+            }
+        }
+    }
+}
+
+/**
+ * DBS(Direct Binary Search, Analoui & Allebach): 用 3x3 高斯感知核衡量误差,
+ * 反复尝试翻转单个像素, 只要"感知误差平方和"下降就接受。
+ * 初始图案取确定性白噪声抖动; 轮数默认 4(可用 opts.dbsPasses 调)。
+ * 这是简化实现: 核固定 3x3、不做多尺度/视觉加权。
+ */
+function ditherDBS(lum, ctx) {
+    const W = LOGO_W, H = LOGO_H, N = W * H;
+    const C = [1 / 16, 2 / 16, 1 / 16, 2 / 16, 4 / 16, 2 / 16, 1 / 16, 2 / 16, 1 / 16];
+    const passes = Math.max(1, Math.min(16, ctx.passes || 4));
+
+    // 初始图案: 白噪声抖动
+    const rnd = logoXorshift32(ctx.seed);
+    const b = new Float64Array(N);              // 1 = 点亮(灰度 255), 0 = 灭
+    const target = new Float64Array(N);         // 目标灰度 0..1
+    for (let i = 0; i < N; i++) {
+        target[i] = lum[i] / 255;
+        b[i] = logoIsLit(lum[i], rnd() * 255, ctx.invert) !== ctx.invert ? 1 : 0;
+    }
+
+    // 感知误差 g = (b - target) ⊛ C, 边界按钳位处理
+    const g = new Float64Array(N);
+    const qIdx = new Int32Array(9), qW = new Float64Array(9);
+    const clampW = (v) => v < 0 ? 0 : (v >= W ? W - 1 : v);
+    const clampH = (v) => v < 0 ? 0 : (v >= H ? H - 1 : v);
+
+    const windowOf = (x, y) => {
+        let nq = 0;
+        for (let t = 0; t < 9; t++) {
+            const q = clampH(y + ((t / 3) | 0) - 1) * W + clampW(x + (t % 3) - 1);
+            let f = -1;
+            for (let j = 0; j < nq; j++) if (qIdx[j] === q) { f = j; break; }
+            if (f < 0) { qIdx[nq] = q; qW[nq] = C[t]; nq++; } else qW[f] += C[t];
+        }
+        return nq;
+    };
+
+    for (let y = 0; y < H; y++) {
+        for (let x = 0; x < W; x++) {
+            const i = y * W + x;
+            const nq = windowOf(x, y);
+            const e = b[i] - target[i];
+            for (let j = 0; j < nq; j++) g[qIdx[j]] += e * qW[j];
+        }
+    }
+
+    for (let pass = 0; pass < passes; pass++) {
+        let flips = 0;
+        for (let y = 0; y < H; y++) {
+            for (let x = 0; x < W; x++) {
+                const i = y * W + x;
+                const nq = windowOf(x, y);
+                let sum1 = 0, sum2 = 0;
+                for (let j = 0; j < nq; j++) {
+                    sum1 += qW[j] * g[qIdx[j]];
+                    sum2 += qW[j] * qW[j];
+                }
+                let s = 0;
+                if (sum1 > 0 && b[i] === 1) s = -1;
+                else if (sum1 < 0 && b[i] === 0) s = 1;
+                if (s !== 0 && Math.abs(sum1) > sum2 / 2) {
+                    b[i] += s;
+                    for (let j = 0; j < nq; j++) g[qIdx[j]] += s * qW[j];
+                    flips++;
+                }
+            }
+        }
+        if (flips === 0) break;
+    }
+
+    for (let y = 0; y < H; y++) {
+        for (let x = 0; x < W; x++) {
+            ctx.setBit(x, y, (b[y * W + x] === 1) !== ctx.invert);
+        }
+    }
+}
+
+// ============ 抖动算法表(网页 UI 与测试都从这里取, 避免两处维护) ============
+const LOGO_DITHER_METHODS = [
+    { key: 'none',         label: '无(单阈值)',                    group: '基础',            usesThreshold: true },
+    { key: 'bayer2',       label: 'Bayer 2x2 有序',                group: '有序抖动',        usesThreshold: false },
+    { key: 'bayer4',       label: 'Bayer 4x4 有序',                group: '有序抖动',        usesThreshold: false },
+    { key: 'bayer8',       label: 'Bayer 8x8 有序',                group: '有序抖动',        usesThreshold: false },
+    { key: 'bluenoise',    label: '蓝噪声(void-and-cluster 64x64)', group: '有序抖动',        usesThreshold: false },
+    { key: 'random',       label: '随机白噪声(固定种子)',          group: '噪声抖动',        usesThreshold: false },
+    { key: 'fs',           label: 'Floyd-Steinberg',               group: '误差扩散',        usesThreshold: true },
+    { key: 'atkinson',     label: 'Atkinson',                      group: '误差扩散',        usesThreshold: true },
+    { key: 'sierralite',   label: 'Sierra Lite',                   group: '误差扩散',        usesThreshold: true },
+    { key: 'sierra2',      label: 'Sierra-2-4A',                   group: '误差扩散',        usesThreshold: true },
+    { key: 'burkes',       label: 'Burkes',                        group: '误差扩散',        usesThreshold: true },
+    { key: 'stucki',       label: 'Stucki',                        group: '误差扩散',        usesThreshold: true },
+    { key: 'jarvis',       label: 'Jarvis-Judice-Ninke',           group: '误差扩散',        usesThreshold: true },
+    { key: 'dotdiffusion', label: 'Dot Diffusion(8x8 类矩阵)',     group: '迭代类',          usesThreshold: true },
+    { key: 'dbs',          label: 'DBS(直接二值搜索, 最慢)',        group: '迭代类',          usesThreshold: false },
+];
+
+// 阈值对这些算法没有意义时, 界面上要说明为什么(而不是让滑块看着能动、实际没反应)
+const LOGO_THRESHOLD_IGNORED_NOTE = {
+    dbs: 'DBS 用感知误差最小化, 判决点固定在 0/255 中间 —— 要改明暗请用上面的色阶',
+    default: '有序/噪声抖动自带空间阈值矩阵, 固定的单阈值对它没有意义',
+};
+
+const LOGO_RANDOM_SEED = 0x2545F491;
+
+/**
+ * 按算法表把灰度逐像素量化成 1bpp
+ * @param {Float64Array} lum 已做色阶的灰度(0..255)
+ * @param {(x:number,y:number,on:boolean)=>void} setBit
+ * @param {{threshold?:number, invert?:boolean, dither?:string, seed?:number, dbsPasses?:number}} opts
+ */
+function logoDitherToBits(lum, setBit, opts) {
+    const invert = !!opts.invert;
+    const threshold = (opts.threshold === undefined) ? 128 : opts.threshold;
+    const ctx = {
+        setBit: setBit,
+        invert: invert,
+        threshold: threshold,
+        seed: (opts.seed === undefined ? LOGO_RANDOM_SEED : opts.seed) >>> 0,
+        passes: opts.dbsPasses,
+    };
+    const method = opts.dither || 'none';
+
+    if (method === 'bayer2' || method === 'bayer4' || method === 'bayer8') {
+        const size = parseInt(method.slice(5), 10);
+        const matrix = size === 8 ? BAYER8 : (size === 4 ? BAYER4 : BAYER2);
+        const levels = size * size;
+        for (let y = 0; y < LOGO_H; y++) {
+            for (let x = 0; x < LOGO_W; x++) {
+                const t = (matrix[(y % size) * size + (x % size)] + 0.5) / levels * 255;
+                setBit(x, y, logoIsLit(lum[y * LOGO_W + x], t, invert));
+            }
+        }
+        return;
+    }
+
+    if (method === 'bluenoise') {
+        const lut = getBlueNoise64();
+        for (let y = 0; y < LOGO_H; y++) {
+            for (let x = 0; x < LOGO_W; x++) {
+                setBit(x, y, logoIsLit(lum[y * LOGO_W + x], blueNoiseThreshold(x, y, lut), invert));
+            }
+        }
+        return;
+    }
+
+    if (method === 'random') {
+        const rnd = logoXorshift32(ctx.seed);
+        for (let y = 0; y < LOGO_H; y++) {
+            for (let x = 0; x < LOGO_W; x++) {
+                setBit(x, y, logoIsLit(lum[y * LOGO_W + x], rnd() * 255, invert));
+            }
+        }
+        return;
+    }
+
+    if (method === 'dotdiffusion') {
+        ditherDotDiffusion(lum, ctx);
+        return;
+    }
+
+    if (method === 'dbs') {
+        ditherDBS(lum, ctx);
+        return;
+    }
+
+    const kernel = LOGO_DIFFUSION_KERNELS[method];
+    if (kernel) {
+        ditherErrorDiffusion(lum, ctx, kernel);
+        return;
+    }
+
+    // 'none' 或未知取值: 单阈值
+    for (let y = 0; y < LOGO_H; y++) {
+        for (let x = 0; x < LOGO_W; x++) {
+            setBit(x, y, logoIsLit(lum[y * LOGO_W + x], threshold, invert));
+        }
+    }
+}
+
+/**
+ * @returns {string} 该算法是否用阈值(给 UI 提示用)
+ */
+function logoDitherUsesThreshold(key) {
+    const m = LOGO_DITHER_METHODS.find((x) => x.key === key);
+    return m ? m.usesThreshold : true;
+}
 
 let logoSourceImage = null;      // 解码后的原图(ImageBitmap/HTMLImageElement)
 let logoBytes = null;            // 转换结果(1024 字节)
@@ -870,16 +1411,12 @@ function logoCrc16(bytes) {
 }
 
 /**
- * ImageData(128x64) -> 1024 字节 1bpp(行优先, 每行 16 字节, MSB 在左)
+ * ImageData(128x64) -> 灰度(Float64Array, 0..255, 已做色阶)
  * @param {ImageData} data
- * @param {{threshold:number, invert:boolean, dither:string}} opts
+ * @param {{levels?:{black:number,white:number,gamma:number,brightness:number,contrast:number}}} opts
+ * @returns {Float64Array}
  */
-function imageDataToLogoBytes(data, opts) {
-    const threshold = (opts && opts.threshold !== undefined) ? opts.threshold : 128;
-    const invert = !!(opts && opts.invert);
-    const dither = (opts && opts.dither) || 'none';
-    const out = new Uint8Array(LOGO_BYTES);
-
+function imageDataToLuminance(data, opts) {
     // 灰度: 透明像素按黑底合成(与命令行工具一致)
     // 用 Float64Array(而不是 Float32)存灰度: 阈值边界上必须和 C++ 工具的 double 完全一致,
     // 否则像"纯 128 灰"这种像素两边会判得不一样(0.299*128+0.587*128+0.114*128 在 double 里
@@ -892,57 +1429,117 @@ function imageDataToLogoBytes(data, opts) {
         const a = data.data[i * 4 + 3] / 255;
         lum[i] = (0.299 * r + 0.587 * g + 0.114 * b) * a;
     }
-
-    const setBit = (x, y, on) => {
-        if (!on) return;
-        out[y * 16 + (x >> 3)] |= (0x80 >> (x & 7));
-    };
-
-    if (dither === 'bayer8') {
-        for (let y = 0; y < LOGO_H; y++) {
-            for (let x = 0; x < LOGO_W; x++) {
-                const t = (BAYER8[(y & 7) * 8 + (x & 7)] + 0.5) / 64 * 255;
-                setBit(x, y, logoIsLit(lum[y * LOGO_W + x], t, invert));
-            }
-        }
-    } else if (dither === 'fs') {
-        const g = Float64Array.from(lum);      // 误差扩散也用 double, 与命令行工具一致
-        for (let y = 0; y < LOGO_H; y++) {
-            for (let x = 0; x < LOGO_W; x++) {
-                const i = y * LOGO_W + x;
-                const v = g[i];
-                const on = logoIsLit(v, threshold, invert);
-                setBit(x, y, on);
-                const quantized = (on !== invert) ? 255 : 0;   // 与固件的量化目标一致
-                const err = v - quantized;
-                if (x + 1 < LOGO_W) g[i + 1] += err * 7 / 16;
-                if (y + 1 < LOGO_H) {
-                    if (x > 0) g[i + LOGO_W - 1] += err * 3 / 16;
-                    g[i + LOGO_W] += err * 5 / 16;
-                    if (x + 1 < LOGO_W) g[i + LOGO_W + 1] += err * 1 / 16;
-                }
-            }
-        }
-    } else {
-        for (let y = 0; y < LOGO_H; y++) {
-            for (let x = 0; x < LOGO_W; x++) {
-                setBit(x, y, logoIsLit(lum[y * LOGO_W + x], threshold, invert));
-            }
-        }
-    }
-    return out;
+    // 色阶(默认参数时是空操作, 见 applyLogoLevels)
+    applyLogoLevels(lum, opts && opts.levels);
+    return lum;
 }
 
 /**
- * 把原图按 fit/fill/stretch 画到 128x64 的画布上(黑底, 浏览器负责缩放)
+ * ImageData(128x64) -> 1024 字节 1bpp(行优先, 每行 16 字节, MSB 在左)
+ * @param {ImageData} data
+ * @param {{threshold:number, invert:boolean, dither:string,
+ *          levels?:{black:number,white:number,gamma:number,brightness:number,contrast:number},
+ *          seed?:number, dbsPasses?:number}} opts
  */
-function renderLogoSource(img, mode) {
+function imageDataToLogoBytes(data, opts) {
+    const options = opts || {};
+    const lum = imageDataToLuminance(data, options);
+    const out = new Uint8Array(LOGO_BYTES);
+    logoDitherToBits(lum, (x, y, on) => {
+        if (on) out[y * 16 + (x >> 3)] |= (0x80 >> (x & 7));
+    }, options);
+    return out;
+}
+
+// ============ 选区裁切(把原图里 2:1 的一块映射到 128x64) ============
+// 选区永远保持 w = 2h: 与 128x64 同比例, 缩过去不会变形。
+// 下面几个都是纯函数(只算坐标, 不碰 DOM), 方便单测。
+
+/** 能放进 imgW x imgH 的最大 2:1 居中矩形(进选区模式时的默认值) */
+function logoDefaultCrop(imgW, imgH) {
+    const h = Math.max(1, Math.min(imgH, Math.floor(imgW / 2)));
+    const w = 2 * h;
+    // 走一遍 clamp: 极小的图(宽 < 2)也能保证坐标不出负数
+    return logoClampCrop({
+        x: Math.floor((imgW - w) / 2),
+        y: Math.floor((imgH - h) / 2),
+        w: w,
+        h: h,
+    }, imgW, imgH);
+}
+
+/** 把任意矩形夹成合法选区: 强制 w = 2h, 并整体落回图内 */
+function logoClampCrop(crop, imgW, imgH) {
+    const maxH = Math.max(1, Math.min(imgH, Math.floor(imgW / 2)));
+    let h = Math.round(Number(crop && crop.h));
+    if (!Number.isFinite(h)) h = maxH;
+    h = Math.max(1, Math.min(maxH, h));
+    const w = 2 * h;
+    let x = Math.round(Number(crop && crop.x));
+    let y = Math.round(Number(crop && crop.y));
+    if (!Number.isFinite(x)) x = 0;
+    if (!Number.isFinite(y)) y = 0;
+    return {
+        x: Math.max(0, Math.min(imgW - w, x)),
+        y: Math.max(0, Math.min(imgH - h, y)),
+        w: w,
+        h: h,
+    };
+}
+
+/** 拖动整体: 大小不变, 只挪位置(自动夹回图内) */
+function logoCropMove(startCrop, startPointer, pointer, imgW, imgH) {
+    return logoClampCrop({
+        x: startCrop.x + (pointer.x - startPointer.x),
+        y: startCrop.y + (pointer.y - startPointer.y),
+        w: startCrop.w,
+        h: startCrop.h,
+    }, imgW, imgH);
+}
+
+/**
+ * 拖角缩放: anchor 是不动的那个对角点, pointer 是当前指针(都取源图像素坐标)。
+ * 取两轴里较大的那个决定高, 再按 2:1 推宽, 所以拖起来跟手又不变形。
+ */
+function logoCropResize(anchor, pointer, imgW, imgH) {
+    const maxH = Math.max(1, Math.min(imgH, Math.floor(imgW / 2)));
+    const dx = pointer.x - anchor.x;
+    const dy = pointer.y - anchor.y;
+    let h = Math.max(Math.abs(dy), Math.abs(dx) / 2);
+    h = Math.max(1, Math.min(maxH, Math.round(h) || 1));
+    const w = 2 * h;
+    return logoClampCrop({
+        x: dx < 0 ? anchor.x - w : anchor.x,
+        y: dy < 0 ? anchor.y - h : anchor.y,
+        w: w,
+        h: h,
+    }, imgW, imgH);
+}
+
+let logoCrop = null;          // 当前选区(源图像素坐标), 只在"选区"缩放方式下用
+
+/**
+ * 把原图按 fit/fill/stretch/选区 画到 128x64 的画布上(黑底, 浏览器负责缩放)
+ * @param {HTMLImageElement} img
+ * @param {string} mode 'fit' | 'fill' | 'stretch' | 'crop'
+ * @param {{x:number,y:number,w:number,h:number}} [crop] 仅 mode='crop' 用, 源图像素坐标
+ */
+function renderLogoSource(img, mode, crop) {
     const cv = document.createElement('canvas');
     cv.width = LOGO_W;
     cv.height = LOGO_H;
     const ctx = cv.getContext('2d');
     ctx.fillStyle = '#000000';
     ctx.fillRect(0, 0, LOGO_W, LOGO_H);
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = 'high';
+
+    if (mode === 'crop') {
+        // 选区: 把源图里选中那一块直接铺满 128x64。选区锁死 2:1, 所以不会变形。
+        const c = logoClampCrop(crop || logoDefaultCrop(img.width, img.height), img.width, img.height);
+        ctx.drawImage(img, c.x, c.y, c.w, c.h, 0, 0, LOGO_W, LOGO_H);
+        return cv;
+    }
 
     let dw = LOGO_W, dh = LOGO_H, dx = 0, dy = 0;
     if (mode !== 'stretch') {
@@ -954,32 +1551,385 @@ function renderLogoSource(img, mode) {
         dx = Math.floor((LOGO_W - dw) / 2);
         dy = Math.floor((LOGO_H - dh) / 2);
     }
-    ctx.imageSmoothingEnabled = true;
-    ctx.imageSmoothingQuality = 'high';
     ctx.drawImage(img, dx, dy, dw, dh);
     return cv;
 }
 
 /**
- * 按当前选项重新生成 1bpp 数据并刷新预览
+ * 把 LOGO_DITHER_METHODS 填进"抖动算法"下拉框(按 group 分 optgroup, 带 ★ 的会用阈值)
+ */
+function renderLogoDitherOptions() {
+    if (!logoDitherSelect) return;
+    const groups = new Map();
+    for (const m of LOGO_DITHER_METHODS) {
+        if (!groups.has(m.group)) groups.set(m.group, []);
+        groups.get(m.group).push(m);
+    }
+    for (const [group, items] of groups) {
+        const og = document.createElement('optgroup');
+        og.label = group;
+        for (const m of items) {
+            const opt = document.createElement('option');
+            opt.value = m.key;
+            opt.textContent = m.label + (m.usesThreshold ? ' ★' : '');
+            og.appendChild(opt);
+        }
+        logoDitherSelect.appendChild(og);
+    }
+    logoDitherSelect.value = 'none';
+    updateLogoDitherNote();
+}
+
+function updateLogoDitherNote() {
+    if (!logoDitherNote || !logoDitherSelect) return;
+    const m = LOGO_DITHER_METHODS.find((x) => x.key === logoDitherSelect.value);
+    logoDitherNote.textContent = m ? (m.usesThreshold ? '会用阈值 ★' : '忽略阈值(自带阈值矩阵)') : '';
+    updateLogoThresholdEnabled();
+}
+
+/**
+ * 当前算法用不到阈值时, 把阈值滑块真的禁用掉并说明原因 ——
+ * 否则滑块看着能动、拖了却没反应, 会让人以为坏了。
+ */
+function updateLogoThresholdEnabled() {
+    if (!logoThresholdInput) return;
+    const m = LOGO_DITHER_METHODS.find((x) => x.key === logoDitherSelect.value);
+    const uses = m ? m.usesThreshold : true;
+    logoThresholdInput.disabled = !uses;
+    if (logoThresholdRow) logoThresholdRow.style.opacity = uses ? '' : '0.45';
+    if (logoThresholdNote) {
+        logoThresholdNote.textContent = uses
+            ? ''
+            : (LOGO_THRESHOLD_IGNORED_NOTE[m.key] || LOGO_THRESHOLD_IGNORED_NOTE.default);
+    }
+}
+
+/** 当前色阶参数(gamma 滑杆是 20..300, 这里换算成 0.2..3.0) */
+function currentLogoLevels() {
+    return {
+        black: parseInt(logoBlackInput.value, 10) || 0,
+        white: parseInt(logoWhiteInput.value, 10) || 255,
+        gamma: (parseInt(logoGammaInput.value, 10) || 100) / 100,
+        brightness: parseInt(logoBrightnessInput.value, 10) || 0,
+        contrast: parseInt(logoContrastInput.value, 10) || 0,
+    };
+}
+
+function updateLogoLevelLabels() {
+    if (logoBlackVal) logoBlackVal.textContent = logoBlackInput.value;
+    if (logoWhiteVal) logoWhiteVal.textContent = logoWhiteInput.value;
+    if (logoGammaVal) logoGammaVal.textContent = (parseInt(logoGammaInput.value, 10) / 100).toFixed(2);
+    if (logoBrightnessVal) logoBrightnessVal.textContent = logoBrightnessInput.value;
+    if (logoContrastVal) logoContrastVal.textContent = logoContrastInput.value;
+    if (logoThresholdVal) logoThresholdVal.textContent = logoThresholdInput.value;
+}
+
+/**
+ * 预览①: 色阶之后的灰度(把 128x64 的灰度放大到画布上)
+ */
+function drawLogoGrayPreview(lum) {
+    if (!logoGrayCanvas || !lum) return;
+    const off = document.createElement('canvas');
+    off.width = LOGO_W;
+    off.height = LOGO_H;
+    const octx = off.getContext('2d');
+    const imgData = octx.createImageData(LOGO_W, LOGO_H);
+    for (let i = 0; i < lum.length; i++) {
+        const v = lum[i];
+        imgData.data[i * 4 + 0] = v;
+        imgData.data[i * 4 + 1] = v;
+        imgData.data[i * 4 + 2] = v;
+        imgData.data[i * 4 + 3] = 255;
+    }
+    octx.putImageData(imgData, 0, 0);
+    const ctx = logoGrayCanvas.getContext('2d');
+    ctx.imageSmoothingEnabled = false;
+    ctx.clearRect(0, 0, logoGrayCanvas.width, logoGrayCanvas.height);
+    ctx.drawImage(off, 0, 0, logoGrayCanvas.width, logoGrayCanvas.height);
+}
+
+/**
+ * 自动色阶: 用未做色阶的灰度算直方图, 把黑场/白场滑杆设过去
+ * (选区模式下只统计选区内的像素, 跟着当前裁切走)
+ */
+function applyLogoAutoLevels() {
+    if (!logoSourceImage) {
+        appendLog('⚠️ 请先选择图片', 'error');
+        return;
+    }
+    const cv = renderLogoSource(logoSourceImage, logoFitSelect.value, logoCropForRender());
+    const data = cv.getContext('2d').getImageData(0, 0, LOGO_W, LOGO_H);
+    const auto = logoAutoLevels(imageDataToLuminance(data, {}), 0.5);
+
+    logoBlackInput.value = auto.black;
+    logoWhiteInput.value = Math.max(auto.black + 1, auto.white);
+    appendLog(`✨ 自动色阶: 黑场=${logoBlackInput.value} 白场=${logoWhiteInput.value}`, 'info');
+    regenerateLogoBytes();
+}
+
+function resetLogoLevels() {
+    logoBlackInput.value = 0;
+    logoWhiteInput.value = 255;
+    logoGammaInput.value = 100;
+    logoBrightnessInput.value = 0;
+    logoContrastInput.value = 0;
+    regenerateLogoBytes();
+    appendLog('↺ 色阶已重置', 'info');
+}
+
+// ============ 选区编辑器(源图缩略图 + 可拖动/缩放的 2:1 选框) ============
+
+const LOGO_CROP_BOX = 460;      // 编辑器显示区边长上限(CSS 像素); 小图会放大到看得清
+const LOGO_CROP_HANDLE = 8;     // 角的命中容差(显示像素)
+
+let logoCropScale = 1;          // 显示缩放比(源图像素 -> 画布像素)
+let logoCropDrag = null;        // 正在拖的状态 {mode, corner, anchor, startPointer, startCrop}
+
+/** 选区只在"选区"缩放方式下参与转换 */
+function logoCropActive() {
+    return !!logoSourceImage && logoFitSelect.value === 'crop';
+}
+
+/** 首次进选区模式(或换图)时给默认选区: 图内最大的 2:1 居中矩形 */
+function ensureLogoCrop() {
+    if (!logoSourceImage) return null;
+    if (!logoCrop) logoCrop = logoDefaultCrop(logoSourceImage.width, logoSourceImage.height);
+    logoCrop = logoClampCrop(logoCrop, logoSourceImage.width, logoSourceImage.height);
+    return logoCrop;
+}
+
+/** 给 renderLogoSource 用的选区: 非选区模式返回 null */
+function logoCropForRender() {
+    return logoCropActive() ? ensureLogoCrop() : null;
+}
+
+function resetLogoCrop() {
+    if (!logoSourceImage) return;
+    logoCrop = logoDefaultCrop(logoSourceImage.width, logoSourceImage.height);
+    regenerateLogoBytes();
+}
+
+/** 画"源图 + 选框": 框外压暗、画三分线、四角画把手 */
+function drawLogoCropEditor() {
+    if (!logoCropCanvas) return;
+    const on = logoCropActive();
+    if (logoCropCanvas.style) logoCropCanvas.style.display = on ? '' : 'none';
+    if (logoCropBox && logoCropBox.style) logoCropBox.style.display = on ? '' : 'none';
+    if (logoCropBar && logoCropBar.style) logoCropBar.style.display = on ? '' : 'none';
+    if (!on) return;
+
+    const img = logoSourceImage;
+    const c = ensureLogoCrop();
+    logoCropScale = Math.min(LOGO_CROP_BOX / img.width, LOGO_CROP_BOX / img.height);
+    const cw = Math.max(1, Math.round(img.width * logoCropScale));
+    const ch = Math.max(1, Math.round(img.height * logoCropScale));
+    logoCropCanvas.width = cw;
+    logoCropCanvas.height = ch;
+    // 放大(小图)时按实际像素看, 缩小(大图)时用平滑缩放, 否则整张图会糊成马赛克
+    if (logoCropCanvas.style) {
+        logoCropCanvas.style.imageRendering = logoCropScale > 1 ? 'pixelated' : 'auto';
+    }
+
+    const ctx = logoCropCanvas.getContext('2d');
+    ctx.imageSmoothingEnabled = false;              // 选的时候按实际像素看
+    ctx.clearRect(0, 0, cw, ch);
+    ctx.drawImage(img, 0, 0, cw, ch);
+
+    const rx = Math.round(c.x * logoCropScale);
+    const ry = Math.round(c.y * logoCropScale);
+    const rw = Math.max(1, Math.round(c.w * logoCropScale));
+    const rh = Math.max(1, Math.round(c.h * logoCropScale));
+
+    // 框外压暗(四条边, 不动框内)
+    ctx.fillStyle = 'rgba(0,0,0,0.62)';
+    ctx.fillRect(0, 0, cw, ry);
+    ctx.fillRect(0, ry + rh, cw, Math.max(0, ch - ry - rh));
+    ctx.fillRect(0, ry, rx, rh);
+    ctx.fillRect(rx + rw, ry, Math.max(0, cw - rx - rw), rh);
+
+    // 边框 + 三分线
+    ctx.strokeStyle = '#38bdf8';
+    ctx.lineWidth = 1;
+    ctx.strokeRect(rx + 0.5, ry + 0.5, Math.max(1, rw - 1), Math.max(1, rh - 1));
+    ctx.strokeStyle = 'rgba(56,189,248,0.45)';
+    for (let i = 1; i <= 2; i++) {
+        const gx = Math.round(rx + rw * i / 3);
+        const gy = Math.round(ry + rh * i / 3);
+        ctx.beginPath(); ctx.moveTo(gx, ry); ctx.lineTo(gx, ry + rh); ctx.stroke();
+        ctx.beginPath(); ctx.moveTo(rx, gy); ctx.lineTo(rx + rw, gy); ctx.stroke();
+    }
+
+    // 四角把手
+    ctx.fillStyle = '#38bdf8';
+    const hs = 5;
+    for (const p of [[rx, ry], [rx + rw, ry], [rx, ry + rh], [rx + rw, ry + rh]]) {
+        ctx.fillRect(p[0] - hs, p[1] - hs, hs * 2, hs * 2);
+    }
+
+    if (logoCropInfo) {
+        logoCropInfo.textContent =
+            `原图 ${img.width}x${img.height} · 选区 ${c.w}x${c.h} @ (${c.x},${c.y})` +
+            ` · 每 1 个屏幕点 ≈ ${(1 / logoCropScale).toFixed(2)} 源像素`;
+    }
+}
+
+/** 指针位置(客户端坐标) -> 源图像素坐标 */
+function logoCropPointerPos(ev) {
+    const rect = logoCropCanvas.getBoundingClientRect();
+    return {
+        x: (ev.clientX - rect.left) / logoCropScale,
+        y: (ev.clientY - rect.top) / logoCropScale,
+    };
+}
+
+/** 指针按在哪个角上(容差折算成源图像素) */
+/** 指针按在哪个角上(容差折算成源图像素); 纯函数, 与 DOM 无关 */
+function logoCropCornerFrom(pos, crop, tol) {
+    if (!crop) return null;
+    const nearL = Math.abs(pos.x - crop.x) <= tol;
+    const nearR = Math.abs(pos.x - (crop.x + crop.w)) <= tol;
+    const nearT = Math.abs(pos.y - crop.y) <= tol;
+    const nearB = Math.abs(pos.y - (crop.y + crop.h)) <= tol;
+    if (nearL && nearT) return 'tl';
+    if (nearR && nearT) return 'tr';
+    if (nearL && nearB) return 'bl';
+    if (nearR && nearB) return 'br';
+    return null;
+}
+
+function logoCropCornerAt(pos) {
+    return logoCropCornerFrom(pos, logoCrop, LOGO_CROP_HANDLE / logoCropScale);
+}
+
+/**
+ * 该用哪个指针图标(纯函数, 可单测):
+ *   四角 -> 沿该对角线方向的双向缩放; 框内 -> 移动; 框外 -> 普通箭头
+ * @param {{x:number,y:number}} pos 源图像素坐标
+ * @param {{x:number,y:number,w:number,h:number}} crop
+ * @param {number} scale 显示缩放比(角的命中容差要按它折算)
+ */
+function logoCropCursorAt(pos, crop, scale) {
+    if (!crop) return 'default';
+    const corner = logoCropCornerFrom(pos, crop, LOGO_CROP_HANDLE / (scale || 1));
+    if (corner === 'tl' || corner === 'br') return 'nwse-resize';
+    if (corner === 'tr' || corner === 'bl') return 'nesw-resize';
+    const inside = pos.x >= crop.x && pos.x <= crop.x + crop.w
+                && pos.y >= crop.y && pos.y <= crop.y + crop.h;
+    return inside ? 'move' : 'default';
+}
+
+/** 悬停时刷新指针图标; 拖动过程中不刷新, 免得手里那个图标跳来跳去 */
+function updateLogoCropCursor(ev) {
+    if (!logoCropCanvas || !logoCropCanvas.style) return;
+    if (!logoCropActive()) return;
+    const pos = logoCropPointerPos(ev);
+    logoCropCanvas.style.cursor = logoCropCursorAt(pos, logoCrop, logoCropScale);
+}
+
+/** 拖某个角时, 不动的是对角那个点 */
+function logoCropAnchorFor(corner) {
+    const c = logoCrop;
+    switch (corner) {
+        case 'tl': return { x: c.x + c.w, y: c.y + c.h };
+        case 'tr': return { x: c.x, y: c.y + c.h };
+        case 'bl': return { x: c.x + c.w, y: c.y };
+        default:   return { x: c.x, y: c.y };
+    }
+}
+
+function onLogoCropPointerDown(ev) {
+    if (!logoCropActive()) return;
+    ensureLogoCrop();
+    const pos = logoCropPointerPos(ev);
+    const corner = logoCropCornerAt(pos);
+    const inside = pos.x >= logoCrop.x && pos.x <= logoCrop.x + logoCrop.w
+                && pos.y >= logoCrop.y && pos.y <= logoCrop.y + logoCrop.h;
+    if (!corner && !inside) return;                 // 框外按下: 不动(避免误拖)
+
+    logoCropDrag = corner
+        ? { mode: 'resize', corner: corner, anchor: logoCropAnchorFor(corner), startPointer: pos, startCrop: logoCrop }
+        : { mode: 'move', startPointer: pos, startCrop: logoCrop };
+    if (ev.preventDefault) ev.preventDefault();
+    if (logoCropCanvas.setPointerCapture && ev.pointerId !== undefined) {
+        try { logoCropCanvas.setPointerCapture(ev.pointerId); } catch (e) { /* 某些浏览器/环境不支持 */ }
+    }
+}
+
+function onLogoCropPointerMove(ev) {
+    if (!logoSourceImage) return;
+    if (!logoCropDrag) {
+        updateLogoCropCursor(ev);                   // 没在拖: 只更新指针图标
+        return;
+    }
+    const W = logoSourceImage.width, H = logoSourceImage.height;
+    const pos = logoCropPointerPos(ev);
+    logoCrop = (logoCropDrag.mode === 'resize')
+        ? logoCropResize(logoCropDrag.anchor, pos, W, H)
+        : logoCropMove(logoCropDrag.startCrop, logoCropDrag.startPointer, pos, W, H);
+    drawLogoCropEditor();
+    if (ev.preventDefault) ev.preventDefault();
+}
+
+function onLogoCropPointerUp() {
+    if (!logoCropDrag) return;
+    logoCropDrag = null;
+    regenerateLogoBytes();                          // 松手才重新转换(拖的时候不卡)
+}
+
+/** 指针移出画布: 图标复位, 免得停在"缩放"上误导 */
+function onLogoCropPointerLeave() {
+    if (logoCropCanvas && logoCropCanvas.style) logoCropCanvas.style.cursor = 'default';
+}
+
+/**
+ * 按当前选项重新生成 1bpp 数据并刷新两个预览
  */
 function regenerateLogoBytes() {
+    updateLogoLevelLabels();
     if (!logoSourceImage) return null;
-    const cv = renderLogoSource(logoSourceImage, logoFitSelect.value);
+    drawLogoCropEditor();                       // 先让选区编辑器跟上(可能会补出默认选区)
+    const cv = renderLogoSource(logoSourceImage, logoFitSelect.value, logoCropForRender());
     const data = cv.getContext('2d').getImageData(0, 0, LOGO_W, LOGO_H);
-    logoBytes = imageDataToLogoBytes(data, {
+    const opts = {
         threshold: parseInt(logoThresholdInput.value, 10),
         invert: logoInvertCheckbox.checked,
         dither: logoDitherSelect.value,
-    });
-    drawLogoPreview(logoBytes);
+        levels: currentLogoLevels(),
+    };
+    setLogoBusySteps(true);
+    const t0 = Date.now();
+    // 灰度只算一次: 预览① 和预览② 用同一份数据
+    const lum = imageDataToLuminance(data, opts);
+    drawLogoGrayPreview(lum);
+    const out = new Uint8Array(LOGO_BYTES);
+    logoDitherToBits(lum, (x, y, on) => {
+        if (on) out[y * 16 + (x >> 3)] |= (0x80 >> (x & 7));
+    }, opts);
+    logoBytes = out;
+    setLogoBusySteps(false);
+    drawLogoPreview(logoBytes, `${logoDitherSelect.value} 用时 ${Date.now() - t0}ms`);
     return logoBytes;
 }
 
 /**
- * 预览: 把 1bpp 数据画到预览画布上(黑色背景 + 白色发光点, 与面板观感一致)
+ * 首次用蓝噪声/Dot Diffusion 时要生成阈值矩阵(几十毫秒), 这里只改按钮上的提示,
+ * 不去动 logoProgress(那是上传进度专用的)
  */
-function drawLogoPreview(bytes) {
+function setLogoBusySteps(busy) {
+    if (!logoDitherNote) return;
+    if (busy) {
+        logoDitherNote.textContent = '首次使用需生成阈值矩阵…';
+    } else {
+        updateLogoDitherNote();
+    }
+}
+
+/**
+ * 预览: 把 1bpp 数据画到预览画布上(黑色背景 + 白色发光点, 与面板观感一致)
+ * @param {Uint8Array} bytes
+ * @param {string} [extra] 附加到统计行后面的说明(比如本次转换耗时)
+ */
+function drawLogoPreview(bytes, extra) {
     if (!logoPreviewCanvas) return;
     const ctx = logoPreviewCanvas.getContext('2d');
     const scale = logoPreviewCanvas.width / LOGO_W;
@@ -997,7 +1947,8 @@ function drawLogoPreview(bytes) {
         }
     }
     if (logoStatSpan) {
-        logoStatSpan.textContent = `点亮 ${lit}/${LOGO_W * LOGO_H} 像素`;
+        const pct = (lit / (LOGO_W * LOGO_H) * 100).toFixed(1);
+        logoStatSpan.textContent = `点亮 ${lit}/${LOGO_W * LOGO_H} 像素 (${pct}%)` + (extra ? ` · ${extra}` : '');
     }
 }
 
@@ -1105,6 +2056,7 @@ function loadLogoFile(file) {
         img.onload = () => {
             URL.revokeObjectURL(url);
             logoSourceImage = img;
+            logoCrop = null;                 // 换图: 选区回到"图内最大 2:1 居中"
             regenerateLogoBytes();
             resolve(img);
         };
@@ -1959,17 +2911,38 @@ logoFileInput.addEventListener('change', async () => {
     if (!file) return;
     try {
         const img = await loadLogoFile(file);
-        appendLog(`🖼️ 已载入图片 ${file.name} (${img.width}x${img.height})`, 'info');
+        const bigger = (img.width > LOGO_W || img.height > LOGO_H);
+        appendLog(
+            `🖼️ 已载入图片 ${file.name} (${img.width}x${img.height})` +
+            (bigger ? ' —— 图比 128x64 大, 想只取其中一块就把"缩放方式"切成"选区框选"' : ''),
+            'info'
+        );
     } catch (err) {
         appendLog(`❌ ${err.message}`, 'error');
     }
 });
 
-[logoThresholdInput, logoFitSelect, logoDitherSelect].forEach(el =>
+[logoThresholdInput, logoFitSelect, logoDitherSelect,
+ logoBlackInput, logoWhiteInput, logoGammaInput, logoBrightnessInput, logoContrastInput].forEach(el =>
     el.addEventListener('input', regenerateLogoBytes));
 logoFitSelect.addEventListener('change', regenerateLogoBytes);
-logoDitherSelect.addEventListener('change', regenerateLogoBytes);
+logoDitherSelect.addEventListener('change', () => {
+    updateLogoDitherNote();
+    regenerateLogoBytes();
+});
 logoInvertCheckbox.addEventListener('change', regenerateLogoBytes);
+
+// 色阶: 自动色阶 / 重置
+logoAutoLevelsBtn.addEventListener('click', applyLogoAutoLevels);
+logoResetLevelsBtn.addEventListener('click', resetLogoLevels);
+
+// 选区: 拖动/缩放选框(指针事件), 重置选区
+logoCropCanvas.addEventListener('pointerdown', onLogoCropPointerDown);
+logoCropCanvas.addEventListener('pointermove', onLogoCropPointerMove);
+logoCropCanvas.addEventListener('pointerup', onLogoCropPointerUp);
+logoCropCanvas.addEventListener('pointercancel', onLogoCropPointerUp);
+logoCropCanvas.addEventListener('pointerleave', onLogoCropPointerLeave);
+logoCropResetBtn.addEventListener('click', resetLogoCrop);
 
 uploadLogoBtn.addEventListener('click', uploadLogo);
 restoreLogoBtn.addEventListener('click', restoreDefaultLogo);
@@ -1991,6 +2964,10 @@ updateNetworkNamePreview();
 
 // 初始化按键映射 UI
 renderKeymap();
+
+// 初始化开机图 UI: 抖动算法下拉框 + 色阶数值显示(此时还没选图片, 不转换)
+renderLogoDitherOptions();
+updateLogoLevelLabels();
 
 // 浏览器兼容性检查
 if (!navigator.hid) {
